@@ -1,0 +1,27 @@
+# 依赖与缓存
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+env/
+
+# 敏感数据 —— 绝对不能提交
+all_keys.json
+all_keys*.json
+*.key
+config.local.json
+
+# 解密快照与归档产物
+data/
+data/decrypted/
+data/archive/
+*.jsonl
+*.db
+*.db-wal
+*.db-shm
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

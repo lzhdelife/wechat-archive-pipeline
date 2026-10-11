@@ -1,0 +1,10 @@
+{
+  "chat_name": "与某人",
+  "peer_wxid": "wxid_PEER",
+  "peer_label": "对方",
+  "self_label": "我",
+  "self_wxid": "wxid_SELF",
+  "db_storage": "C:/Users/<user>/xwechat_files/<wxid>_<suffix>/db_storage",
+  "include_system": false,
+  "note": "私聊归档配置。peer_wxid = 聊天对象的 wxid，消息表名 = Msg_<md5(peer_wxid)>。self_wxid 仅供参考，实际发言归属靠各分片 Name2Id.is_session 判定（0=我，1=对方）。可用 `python sync_pm.py --list-sessions` 查出 peer_wxid。"
+}

@@ -1,0 +1,22 @@
+{
+  "chatroom": "<GROUP_ID>@chatroom",
+  "chat_name": "我的群",
+  "owner_wxid": "wxid_OWNER",
+
+  "track_mode": "all",
+  "track_senders": {
+    "wxid_OWNER": "群主",
+    "wxid_SELF": "我"
+  },
+
+  "self_wxids": [
+    "wxid_SELF"
+  ],
+  "self_label": "我",
+
+  "db_storage": "C:/Users/<user>/xwechat_files/<wxid>_<suffix>/db_storage",
+  "include_system": false,
+  "export_csv": true,
+
+  "note": "track_mode=all 抓全群所有成员发言（社群分析用）；改为 whitelist 则只抓 track_senders。self_wxids 是本人的号，导出时标注为「我」。chatroom 可在解密后读 session.db 的 SessionTable 查（username like '%@chatroom'）。"
+}
