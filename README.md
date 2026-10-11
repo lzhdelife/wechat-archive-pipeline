@@ -1,6 +1,6 @@
 # wechat-archive-pipeline
 
-> 只读导出**你自己**的微信（Windows 4.1.x）本地聊天记录，输出 jsonl / md / csv。
+> 只读导出**你自己**的微信（Windows 4.1.x）本地聊天记录，输出 jsonl / md / csv（+ 可选 html 阅读版）。
 > 不注入、不 Hook、不修改微信。适用于个人归档与让 AI 助手了解自己。
 
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -17,13 +17,18 @@
 
 ```
 微信在运行（登录在线）
-   ↓  只读扫描进程内存中的 Config.Cipher 运行时对象（XOR 混淆）
+   ↓  只读扫描进程内存里的 Config.Cipher / keyspec（XOR 混淆，字符串扫不到）
 取出本次登录的数据库密钥
-   ↓  PBKDF2-HMAC-SHA512(passphrase, salt, 256000, 32)
+   ├─ Windows runtime 扫描：直接得到 raw key（x'<64hex key><32hex salt>'）
+   └─ 其他平台 / passphrase 路线：PBKDF2-HMAC-SHA512(passphrase, salt, 256000, 32)
+   ↓  HMAC-SHA512 校验（mac_key = PBKDF2-SHA512(key, salt^0x3A, 2, 32)）
 解密数据库【副本】（原文件不动）
    ↓  跨 5 个 message_N.db 分片合并 + 指纹去重
-导出 jsonl / md / csv
+导出 jsonl / md / csv（+ 可选 html 阅读版）
 ```
+
+> ⚠️ 校验密钥对错时**不要**看 `SQLite format 3` 魔数——page1 前 16 字节被 salt 占着，
+> 解密后根本看不到它。判据是「页头字段 + HMAC-SHA512」，详见 [`docs/pitfalls.md`](docs/pitfalls.md) 坑 11。
 
 支持两种会话类型：
 
@@ -48,13 +53,14 @@ pip install pycryptodome psutil zstandard
 ### 1. 提取密钥（管理员命令行）
 
 ```bash
-python tools/key_tool/wcdb_key_tool_windows.py -v extract \
+python tools/vendor/wcdb_key_tool_windows.py -v extract \
     --db-dir "C:/Users/<你>/xwechat_files/<你的wxid>_<后缀>/db_storage"
 ```
 
 成功标志：`matched N/N salts`。产物 `all_keys.json`。
 
 > ⚠️ `-v` 必须放在 `extract` 前面。密钥每次登录可能变化，失效就重取。
+> 想用一个 ~250 行的精简替代实现（不依赖版本相关掩码常量），见下方 [tools/lite](#精简取密钥参考实现toolslite)。
 
 ### 2. 配置
 
@@ -77,6 +83,9 @@ python src/sync.py
 # 私聊
 python src/sync_pm.py --inspect   # 先自检
 python src/sync_pm.py             # 正式归档
+
+# 可选：生成单文件 HTML 阅读版（米色纸感、可搜索、只看某人）
+python src/gen_html.py --jsonl "data/archive/与某人.jsonl" --peer-name "对方"
 ```
 
 输出到 `data/archive/`。
@@ -87,10 +96,33 @@ python src/sync_pm.py             # 正式归档
 ├── src/
 │   ├── sync.py            群聊归档引擎
 │   ├── sync_pm.py         私聊归档引擎
+│   ├── gen_html.py        jsonl → 单文件 HTML 阅读版
 │   ├── config.json        群聊配置
 │   └── config_pm.json     私聊配置
-├── tools/key_tool/        密钥提取（见下方致谢）
-└── docs/pitfalls.md       10 个踩坑清单
+├── tools/
+│   ├── vendor/            密钥提取（上游 wcdb-key-tool）
+│   └── lite/              精简取密钥/解密参考实现（~250 行，见下）
+└── docs/
+    ├── pitfalls.md        13 个踩坑清单
+    └── quickstart.md      快速开始
+```
+
+## 精简取密钥参考实现（tools/lite）
+
+[`tools/lite/wcdb_key_lite.py`](tools/lite/wcdb_key_lite.py) 是 vendor 版密钥工具的精简替代：
+约 250 行纯 Python（只依赖 `pycryptodome`），把"取密钥 → 解密"讲清楚。
+
+- **不依赖运行时对象结构**，也不依赖任何**版本相关的固定掩码常量**；
+- 用「**已知明文反推 pad**」：keyspec 尾部 32 字节就是本库 salt 的 ASCII hex，
+  据此当场解出 XOR pad，再取 `[2:66]` 得到 raw key（详见 [`docs/pitfalls.md`](docs/pitfalls.md) 坑 12）；
+- CLI 与 vendor 版对齐，`decrypt` 的进度行格式一致，可直接用环境变量切进 `src/sync*.py`：
+
+```bash
+python tools/lite/wcdb_key_lite.py extract --db-dir "<...>/db_storage"
+python tools/lite/wcdb_key_lite.py decrypt --db-dir "<...>/db_storage" \
+    --keys all_keys.json --output data/decrypted
+
+KEY_TOOL_PY=python TOOL_PY=tools/lite/wcdb_key_lite.py python src/sync_pm.py
 ```
 
 ## 已知坑（完整版见 docs/pitfalls.md）
@@ -98,7 +130,7 @@ python src/sync_pm.py             # 正式归档
 | # | 坑 |
 |---|---|
 | 1 | 4.1+ 内存中无明文密钥，旧工具全部失效 |
-| 2 | 密钥 XOR 混淆，需以运行时对象视角读取 |
+| 2 | 密钥 XOR 混淆，需以运行时对象视角读取（也可用已知明文反推，见 12）|
 | 3 | 同一消息表跨 5 个分片，需合并 + 指纹去重 |
 | 4 | **各分片 Name2Id rowid 独立，必须按分片解析发送者** |
 | 5 | `local_type` 高 32 位是子类型 |
@@ -107,6 +139,9 @@ python src/sync_pm.py             # 正式归档
 | 8 | `<refermsg>` 内含 `<title>`，先剔除再取主标题 |
 | 9 | 不需要解密 WAL |
 | 10 | 手机记录需「迁移」（非备份）到电脑才有 |
+| 11 | **page1 前 16 字节被 salt 占，别拿 `SQLite format 3` 当判据** |
+| 12 | keyspec 是 XOR 混淆的，可用已知明文（salt hex）反推 pad |
+| 13 | 名字在 remark/nick 里搜不到时，用解密数据 grep 名字反查 wxid |
 
 ## FAQ
 

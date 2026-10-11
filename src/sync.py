@@ -41,7 +41,7 @@ import datetime as dt
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOLS = os.path.dirname(HERE)
 TOOL_DIR = os.environ.get("KEY_TOOL_DIR", os.path.join(TOOLS, "vendor"))
-TOOL_PY = os.path.join(TOOL_DIR, "wcdb_key_tool_windows.py")
+TOOL_PY = os.environ.get("TOOL_PY", os.path.join(TOOL_DIR, "wcdb_key_tool_windows.py"))
 KEYS = os.environ.get("ALL_KEYS", os.path.join(TOOL_DIR, "all_keys.json"))
 DATA = os.environ.get("WXPIPE_DATA", os.path.join(TOOLS, "data"))
 DEC = os.path.join(DATA, "decrypted")

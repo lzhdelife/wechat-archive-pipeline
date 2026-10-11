@@ -1,4 +1,4 @@
-# 踩坑清单（10 条，全部实测）
+# 踩坑清单（13 条，全部实测）
 
 > 本文档是这套流水线最值钱的部分。每一条都是真金白银试出来的。
 
@@ -21,6 +21,8 @@
 **原因**：4.1 把密钥放在一个运行时配置对象（`Config.Cipher`）里，且做了 XOR 混淆。
 
 **关键认知**：不能以"字节视角"扫，要以"对象视角"读——先定位对象，再按对象结构取出字段，最后 XOR 解码。
+
+> 补充（第二轮实测）：也可以完全绕开对象结构，用"已知明文反推 pad"的办法扫整块内存。见坑 12。
 
 ---
 
@@ -119,6 +121,96 @@ message_1.db:  rowid 2 → wxid_BBB     ← 同一个 2，指向不同的人
 
 ---
 
+## 11. ⚠️ 页 1 前 16 字节被 salt 占着，别拿 `SQLite format 3` 当判据
+
+**现象**：密钥明明是对的，但用它解密第 1 页后**看不到** `SQLite format 3\0`，
+于是误判"密钥取错了"，回头反复重扫内存 / 重取密钥，白折腾半天。
+
+**原因**：SQLCipher 会把数据库**前 16 字节的头部**替换成本库的 salt。
+解密第 1 页后，`pt[0:16]` 是 **salt 本身**，不是 SQLite 魔数。
+明文 SQLite 文件的魔数需要**人为补回**——这正是解密器第 1 页写
+`SQLITE_HDR + pt + b"\x00" * RESERVE` 的原因，不是可选的美化。
+
+**正确判据**（满足其一即可，两个都过最稳）：
+
+1. **页头字段**：解密 page1 后
+   - `pt[0:2] == \x10\x00` → page_size = 4096（大端）
+   - `pt[5:8] == \x40\x20\x20` → SQLite 文件头余段固定值
+2. **HMAC-SHA512**：
+   ```python
+   mac_salt = bytes(b ^ 0x3A for b in page1[:16])
+   mac_key  = hashlib.pbkdf2_hmac("sha512", enc_key, mac_salt, 2, dklen=32)
+   hm       = hmac.new(mac_key, page1[16 : 4096-80+16], hashlib.sha512)
+   hm.update(struct.pack("<I", 1))
+   assert hm.digest() == page1[4096-64 : 4096]
+   ```
+
+**别混淆两个 PBKDF2**：
+- 上面这步是 **MAC key** 派生，**2 轮**迭代（SQLCipher 规范）；
+- 而"enc key 的 256000 轮 PBKDF2"只在**passphrase 路线**（Linux/macOS 断点）用；
+- **raw key 路线**（`x'<64hex>'`，Windows runtime 扫描走的就是它）对 enc key 不做任何 PBKDF2。
+
+---
+
+## 12. 4.1 的 keyspec 是 XOR 混淆的——用"已知明文"现场反推 pad
+
+**现象**：内存里连 `x'<64hex>'` 都扫不到，直接 0 命中（坑 1 的后续）。
+
+**原因**：4.1 把整串 keyspec
+
+```
+x'<64位 enc_key 的 hex><32位 salt 的 hex>'      # 共 99 字节
+```
+
+用一个 **32 字节 pad 循环 XOR**（`keyspec[j] ^= pad[j % 32]`）混淆后，放进运行时对象里。
+
+**解法（`tools/lite/wcdb_key_lite.py` 用的就是这个，不依赖对象结构、也不依赖版本相关的掩码常量）**：
+
+keyspec **尾部 32 字节的明文就是该库 salt 的 ASCII hex**——这是**已知的**，于是可当场反推 pad：
+
+```python
+temp = bytes(a ^ b for a, b in zip(ct[66:98], salt_hex))   # = pad[2:32] ++ pad[0:2]
+pad  = temp[30:32] + temp[0:30]                            # 旋转回正确相位
+assert ct[0] ^ pad[0] == ord('x') and ct[1] ^ pad[1] == ord("'")   # 自校验
+pt      = bytes(ct[j] ^ pad[j % 32] for j in range(99))    # 解出明文 keyspec
+raw_key = bytes.fromhex(pt[2:66].decode())                 # 32 字节
+```
+
+全内存扫描时不必逐字节试：只在 `diff[j] = data[j] ^ data[j+96]` 上找
+`(diff[j], diff[j+1]) == (ord('x') ^ pad0, ord("'") ^ pad1)` 这一个 2 字节特征即可，
+一次大整数异或就能扫完几百 MB，很快。
+
+**好处**：微信升级、掩码常量变化时依然可用——只要 keyspec 还带 salt 尾巴就行。
+
+---
+
+## 13. 对方不在联系人里时，怎么反查出他的 wxid
+
+**现象**：想归档和某人的私聊，但把能想到的名字在 `contact.db` 的
+`remark` / `nick_name` / `alias` / 拼音字段里搜了个遍都**搜不到**——
+对方没被存成联系人备注，昵称也不是真名。于是不知道该往 `config_pm.json` 里填什么 `peer_wxid`。
+
+**解法（用"内容反查会话"）**：
+
+1. 在**已经解密**的明文数据里按字节搜名字：
+   ```bash
+   grep -rla "真名" data/decrypted/
+   ```
+   通常会命中 `message/message_N.db`、`sns/sns.db`（朋友圈）等；
+2. 表名即 `Msg_<md5(对方wxid)>`。把命中该名字的会话表里的消息抽出来看
+   ——往往是"**XXX 撤回了一条消息**"这类系统提示，或对方一句自述，
+   足以认定身份；
+3. 三重交叉核对：
+   ```python
+   hashlib.md5(peer_wxid.encode()).hexdigest() == "命中表名的后缀"
+   ```
+   再用该 wxid 到 `session.db` 的 `SessionTable` 查最近消息、
+   到 `contact.db` 看 `alias`（微信号缩写常能印证真名，如 `AaLV…` = 吕）。
+
+> 比"逐个会话点开猜"快得多，是"名字 → wxid"反查的标准姿势。
+
+---
+
 ## 附：其他易踩点
 
 | 坑 | 解法 |
@@ -129,3 +221,6 @@ message_1.db:  rowid 2 → wxid_BBB     ← 同一个 2，指向不同的人
 | 微信未运行 | 取密钥前必须确保微信登录在线 |
 | 新导入记录后旧密钥失效 | 数据库结构变了会新增库，需重取密钥 |
 | 语音消息无内容 | 只有 aeskey + CDN 地址，本地无音频文件 |
+| 判定密钥是否正确的依据 | 不是 `SQLite format 3`（见坑 11），是页头字段 + HMAC-SHA512 |
+| 掩码常量随版本失效 | 改用"已知明文反推 pad"（见坑 12），无需版本相关常量 |
+| 名字搜不到 / 不知 peer_wxid | 用解密数据 `grep` 名字反查会话表（见坑 13） |
