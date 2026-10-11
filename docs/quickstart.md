@@ -2,6 +2,8 @@
 
 > **不想自己敲命令？** 用 [`prompt-oneclick.md`](prompt-oneclick.md)：整份粘给 AI 助手即可。
 > 本文是"自己动手"的版本。
+>
+> **Mac 用户**：本页不适用（两平台机制不同），请看 [`macos.md`](macos.md)。
 
 ## 前置条件
 

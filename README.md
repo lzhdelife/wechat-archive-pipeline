@@ -1,6 +1,7 @@
 # wechat-archive-pipeline
 
-> 只读导出**你自己**的微信（Windows 4.1.x）本地聊天记录，输出 jsonl / md / csv（+ 可选 html 阅读版）。
+> 只读导出**你自己**的微信本地聊天记录（**Windows 4.1.x**；macOS 见 [`docs/macos.md`](docs/macos.md)），
+> 输出 jsonl / md / csv（+ 可选 html 阅读版）。
 > 不注入、不 Hook、不修改微信。适用于个人归档与让 AI 助手了解自己。
 
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -11,16 +12,28 @@
 
 ---
 
+## 平台：本仓库覆盖 Windows；Mac 请走 GreenBubbles
+
+| 你的电脑 | 走哪条路 |
+|---|---|
+| **Windows**（微信 4.1.x） | **本仓库**：`src/` + `tools/`，见下 |
+| **macOS（Apple 芯片 + 14+）** | **本仓库流程不适用** → 用 [GreenBubbles](https://github.com/bojieli/greenbubbles)，见 [`docs/macos.md`](docs/macos.md) |
+| macOS（Intel）/ 手机 / 平板 | 目前没有可行方案 |
+
+> 两台机器上微信的**数据与加密机制不同**（Mac 走 LLDB 抓取 + 重新签名微信，Windows 走读进程内存 + XOR keyspec），
+> 所以 Mac 上**不要照搬**本仓库的取密钥思路。
+
 ## 自动跑（不懂技术看这里）
 
 `docs/prompt-oneclick.md` 是一份**面向非技术用户的一键提示词**：把整份文件粘给支持本地文件操作的
 AI 助手（WorkBuddy 等），它会自己探测环境 → 取密钥 → 解密 → 找到联系人 → 导出网页版聊天记录。
+**它同时含 Windows 与 macOS 两条流程**，AI 会按系统自己选对应的那条。
 
-四个前提：
+Windows 前提：
 
 | # | 前提 |
 |---|---|
-| 1 | Windows 电脑（不支持 Mac / 手机）|
+| 1 | Windows 电脑（Mac 见 `docs/macos.md`；手机不行）|
 | 2 | 装了会用本地文件的 AI 助手（如 WorkBuddy）|
 | 3 | 电脑版微信已登录你自己，且**正在运行**（取密钥需要）|
 | 4 | 想读**完整历史**，需先在**手机**上做「**迁移到电脑微信**」（见坑 10）|
@@ -28,6 +41,9 @@ AI 助手（WorkBuddy 等），它会自己探测环境 → 取密钥 → 解密
 提示词里已把本仓库踩过的坑全部前置（XOR keyspec、判据不能用 SQLite 魔数、分片 Name2Id 独立、
 找人的内容反查法、跳过 `*_fts.db`、CSV BOM、WAL 顺序、管理员权限引导、失败兜底……），
 所以照着跑通常一趟就能过。
+
+Mac 前提（更严）：Apple 芯片、macOS 14+、微信 4.1+、**管理员权限**，且工具会**替换 WeChat.app 的苹果签名**。
+详见 [`docs/macos.md`](docs/macos.md)。
 
 ---
 
@@ -132,7 +148,8 @@ python src/gen_html.py --jsonl "data/archive/与某人.jsonl" --peer-name "对�
 │   ├── vendor/            密钥提取（上游 wcdb-key-tool）
 │   └── lite/              精简取密钥/解密参考实现（~250 行，见下）
 └── docs/
-    ├── prompt-oneclick.md 面向非技术用户的一键提示词（粘给 AI 助手）
+    ├── prompt-oneclick.md 面向非技术用户的一键提示词（Windows + macOS 两条流程）
+    ├── macos.md           macOS 走 GreenBubbles 的说明与限制
     ├── pitfalls.md        14 个踩坑清单
     └── quickstart.md      快速开始
 ```
@@ -180,7 +197,9 @@ KEY_TOOL_PY=python TOOL_PY=tools/lite/wcdb_key_lite.py python src/sync_pm.py
 
 **能读别人的记录吗？** 不能。见顶部边界说明。
 
-**Mac / iOS？** 思路相同，密钥提取方式各平台不同，本仓库只覆盖 Windows。
+**Mac / iOS？** 本仓库只覆盖 Windows。**macOS 请走 [GreenBubbles](https://github.com/bojieli/greenbubbles)**
+（Apple 芯片 + macOS 14+ + 微信 4.1+，会重新签名微信），见 [`docs/macos.md`](docs/macos.md)。
+iOS / Android 没有可行方案。
 
 ## 致谢
 
